@@ -28,21 +28,53 @@ def cargar_predicciones_nube():
     return {}
 
 def guardar_prediccion_nube(id_partido, marcador):
-    # 1. Traemos el historial completo de la nube
     estado_actual = cargar_predicciones_nube()
-    
-    # 2. Actualizamos el diccionario con la nueva predicción
     estado_actual[str(id_partido)] = str(marcador)
-    
-    # 3. Sobrescribimos la base de datos en la nube
-    headers = {
-        'Content-Type': 'application/json',
-        'X-Master-Key': JSONBIN_KEY
-    }
+    headers = {'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY}
     requests.put(JSONBIN_URL, json=estado_actual, headers=headers)
-    
-    # 4. Actualizamos la memoria visual de la app
     st.session_state['predicciones'][str(id_partido)] = marcador
+
+# --- MOTOR HEURÍSTICO DINÁMICO AVANZADO ---
+def calcular_marcador_inteligente(ganador, cuota_ganador, equipo_local, equipo_visitante, tendencia_goles_str):
+    if not tendencia_goles_str:
+        es_under = True
+        linea_numerica = 2.5
+    else:
+        partes = tendencia_goles_str.split()
+        es_under = "Under" in partes[0]
+        linea_numerica = float(partes[1]) if len(partes) > 1 else 2.5
+
+    # NUEVO: Evaluamos si el ganador es un favorito aplastante (cuota menor a 1.55)
+    es_goleada = cuota_ganador < 1.55
+
+    if ganador not in [equipo_local, equipo_visitante]:
+        if es_under: return "0-0" if linea_numerica < 2.0 else "1-1"
+        else: return "2-2" if linea_numerica < 4.0 else "3-3"
+
+    # NUEVO: Lógica sensible al favoritismo
+    if es_under:
+        if linea_numerica <= 1.5: 
+            goles_ganador, goles_perdedor = 1, 0
+        elif linea_numerica <= 2.5: 
+            goles_ganador, goles_perdedor = 2, 0
+        elif linea_numerica <= 3.5: 
+            goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 1)
+        else: 
+            goles_ganador, goles_perdedor = (4, 0) if es_goleada else (3, 1)
+    else: # Es Over
+        if linea_numerica <= 1.5: 
+            goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 0)
+        elif linea_numerica <= 2.5: 
+            goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 1) # ¡Acá está la magia del 3-0!
+        elif linea_numerica <= 3.5: 
+            goles_ganador, goles_perdedor = (4, 0) if es_goleada else (3, 1)
+        else: 
+            goles_ganador, goles_perdedor = (5, 0) if es_goleada else (3, 2)
+
+    if ganador == equipo_local:
+        return f"{goles_ganador}-{goles_perdedor}"
+    else:
+        return f"{goles_perdedor}-{goles_ganador}"
 
 # --- TRATAMIENTO DE DATOS DE THE ODDS API ---
 @st.cache_data(ttl=3600)
@@ -57,8 +89,8 @@ def obtener_partidos_api():
 if 'predicciones' not in st.session_state:
     st.session_state['predicciones'] = cargar_predicciones_nube()
 
-st.title("🏆 Predictor Prode (JSONBin Nube)")
-st.write("Datos guardados permanentemente sin tarjetas de crédito.")
+st.title("🏆 Predictor Prode 3.0")
+st.write("Motor heurístico dinámico con sensibilidad de goleadas.")
 
 if st.button("🔄 Sincronizar Fixture (Próximos 15 días)"):
     st.cache_data.clear()
@@ -97,6 +129,7 @@ if datos_api:
                     if partido['bookmakers']:
                         h2h = None
                         totals = None
+                        nombre_casa = "Desconocida"
                         
                         for bookmaker in partido['bookmakers']:
                             mercados = bookmaker['markets']
@@ -106,6 +139,7 @@ if datos_api:
                             if h2h_temp and totals_temp:
                                 h2h = h2h_temp
                                 totals = totals_temp
+                                nombre_casa = bookmaker['title']
                                 break 
                         
                         if not h2h:
@@ -114,28 +148,39 @@ if datos_api:
                                 h2h_temp = next((m['outcomes'] for m in mercados if m['key'] == 'h2h'), None)
                                 if h2h_temp:
                                     h2h = h2h_temp
+                                    nombre_casa = bookmaker['title']
                                     break
                         
                         if h2h:
-                            ganador_cuota = min(h2h, key=lambda x: x['price'])['name']
+                            # 1. Obtenemos al ganador y su cuota
+                            resultado_ganador = min(h2h, key=lambda x: x['price'])
+                            ganador_nombre = resultado_ganador['name']
+                            ganador_cuota_valor = resultado_ganador['price']
                             
+                            # 2. Obtenemos el texto completo de los goles
+                            tendencia_goles_str = None
+                            origen_dato = "🛡️ (Respaldo)"
                             if totals:
-                                es_under = 'Under' in min(totals, key=lambda x: x['price'])['name']
-                                origen_dato = "🎯 (Apuestas)"
-                            else:
-                                es_under = True 
-                                origen_dato = "🛡️ (Respaldo)"
+                                resultado_goles = min(totals, key=lambda x: x['price'])
+                                tendencia_goles_str = resultado_goles['name']
+                                origen_dato = f"🎯 (Apuestas: {tendencia_goles_str})"
                             
-                            if ganador_cuota == equipo_local:
-                                marcador_base = "1-0" if es_under else "2-1"
-                            elif ganador_cuota == equipo_visitante:
-                                marcador_base = "0-1" if es_under else "1-2"
-                            else:
-                                marcador_base = "1-1" if es_under else "2-2"
+                            # 3. Pasamos el ganador, la cuota y los goles por el motor
+                            marcador_base = calcular_marcador_inteligente(
+                                ganador_nombre, 
+                                ganador_cuota_valor, 
+                                equipo_local, 
+                                equipo_visitante, 
+                                tendencia_goles_str
+                            )
                             
-                            marcador_final = f"{marcador_base} {origen_dato}"
+                            # Añadimos un ícono de 🔥 si detectó goleada para que lo sepas
+                            if ganador_cuota_valor < 1.55 and (tendencia_goles_str and "Over" in tendencia_goles_str):
+                                marcador_base = f"🔥 {marcador_base}"
+
+                            marcador_final = f"{marcador_base} | {origen_dato} | 🏦 {nombre_casa}"
                             
-                            with st.spinner('Guardando en la nube...'):
+                            with st.spinner('Procesando heurística y guardando...'):
                                 guardar_prediccion_nube(id_partido, marcador_final)
                             st.rerun()
                         else:
