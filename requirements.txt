@@ -2,4 +2,4 @@ streamlit
 requests
 pandas
 datetime
-streamlit-gsheets-connection
+st-gsheets-connection
