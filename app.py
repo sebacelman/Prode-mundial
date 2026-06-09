@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import pandas as pd
 from datetime import datetime, timedelta, timezone
 
 # --- CONFIGURACIÓN DE PÁGINA ---
@@ -44,14 +43,14 @@ def calcular_marcador_inteligente(ganador, cuota_ganador, equipo_local, equipo_v
         es_under = "Under" in partes[0]
         linea_numerica = float(partes[1]) if len(partes) > 1 else 2.5
 
-    # NUEVO: Evaluamos si el ganador es un favorito aplastante (cuota menor a 1.55)
     es_goleada = cuota_ganador < 1.55
 
+    # Lógica para Empates (Naturales o Forzados por Paridad)
     if ganador not in [equipo_local, equipo_visitante]:
         if es_under: return "0-0" if linea_numerica < 2.0 else "1-1"
         else: return "2-2" if linea_numerica < 4.0 else "3-3"
 
-    # NUEVO: Lógica sensible al favoritismo
+    # Lógica sensible al favoritismo
     if es_under:
         if linea_numerica <= 1.5: 
             goles_ganador, goles_perdedor = 1, 0
@@ -65,7 +64,7 @@ def calcular_marcador_inteligente(ganador, cuota_ganador, equipo_local, equipo_v
         if linea_numerica <= 1.5: 
             goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 0)
         elif linea_numerica <= 2.5: 
-            goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 1) # ¡Acá está la magia del 3-0!
+            goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 1)
         elif linea_numerica <= 3.5: 
             goles_ganador, goles_perdedor = (4, 0) if es_goleada else (3, 1)
         else: 
@@ -89,8 +88,8 @@ def obtener_partidos_api():
 if 'predicciones' not in st.session_state:
     st.session_state['predicciones'] = cargar_predicciones_nube()
 
-st.title("🏆 Predictor Prode 3.0")
-st.write("Motor heurístico dinámico con sensibilidad de goleadas.")
+st.title("🏆 Mi Prode Inteligente")
+st.write("Predicciones matemáticas avanzadas sincronizadas en la nube.")
 
 if st.button("🔄 Sincronizar Fixture (Próximos 15 días)"):
     st.cache_data.clear()
@@ -152,12 +151,23 @@ if datos_api:
                                     break
                         
                         if h2h:
-                            # 1. Obtenemos al ganador y su cuota
-                            resultado_ganador = min(h2h, key=lambda x: x['price'])
-                            ganador_nombre = resultado_ganador['name']
-                            ganador_cuota_valor = resultado_ganador['price']
+                            # 1. Extracción de cuotas para medir paridad
+                            cuota_local = next((x['price'] for x in h2h if x['name'] == equipo_local), 99.0)
+                            cuota_visitante = next((x['price'] for x in h2h if x['name'] == equipo_visitante), 99.0)
+                            cuota_empate = next((x['price'] for x in h2h if x['name'] in ['Draw', 'Empate']), 3.0)
                             
-                            # 2. Obtenemos el texto completo de los goles
+                            # 2. Detector de Empate Técnico
+                            if abs(cuota_local - cuota_visitante) < 0.35 and cuota_local > 2.20:
+                                ganador_nombre = "Empate Técnico"
+                                ganador_cuota_valor = cuota_empate
+                                es_empate_forzado = True
+                            else:
+                                resultado_ganador = min(h2h, key=lambda x: x['price'])
+                                ganador_nombre = resultado_ganador['name']
+                                ganador_cuota_valor = resultado_ganador['price']
+                                es_empate_forzado = False
+                            
+                            # 3. Datos de Goles
                             tendencia_goles_str = None
                             origen_dato = "🛡️ (Respaldo)"
                             if totals:
@@ -165,7 +175,7 @@ if datos_api:
                                 tendencia_goles_str = resultado_goles['name']
                                 origen_dato = f"🎯 (Apuestas: {tendencia_goles_str})"
                             
-                            # 3. Pasamos el ganador, la cuota y los goles por el motor
+                            # 4. Cálculo final en el motor
                             marcador_base = calcular_marcador_inteligente(
                                 ganador_nombre, 
                                 ganador_cuota_valor, 
@@ -174,13 +184,15 @@ if datos_api:
                                 tendencia_goles_str
                             )
                             
-                            # Añadimos un ícono de 🔥 si detectó goleada para que lo sepas
-                            if ganador_cuota_valor < 1.55 and (tendencia_goles_str and "Over" in tendencia_goles_str):
+                            # 5. Adición de etiquetas visuales
+                            if es_empate_forzado:
+                                marcador_base = f"⚖️ {marcador_base}"
+                            elif ganador_cuota_valor < 1.55 and (tendencia_goles_str and "Over" in tendencia_goles_str):
                                 marcador_base = f"🔥 {marcador_base}"
 
                             marcador_final = f"{marcador_base} | {origen_dato} | 🏦 {nombre_casa}"
                             
-                            with st.spinner('Procesando heurística y guardando...'):
+                            with st.spinner('Procesando heurística y guardando en la nube...'):
                                 guardar_prediccion_nube(id_partido, marcador_final)
                             st.rerun()
                         else:
