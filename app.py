@@ -2,67 +2,67 @@ import streamlit as st
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from streamlit_gsheets import GSheetsConnection
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Mi Prode en Google Sheets", page_icon="⚽", layout="centered")
+st.set_page_config(page_title="Prode Mundial 2026", page_icon="⚽", layout="centered")
 
-API_KEY = 'a9b7c4446ff19f47b711aea2ac633e5a' 
+# --- SECRETS Y CLAVES ---
+API_KEY_ODDS = 'a9b7c4446ff19f47b711aea2ac633e5a' 
+JSONBIN_BIN_ID = st.secrets["JSONBIN_BIN_ID"]
+JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+
 SPORT = 'soccer_fifa_world_cup' 
 MARKETS = 'h2h,totals' 
 REGIONS = 'eu' 
 
-# --- CONEXIÓN CON GOOGLE SHEETS ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-def cargar_predicciones_sheets():
+# --- CONEXIÓN CON JSONBIN (NUBE) ---
+def cargar_predicciones_nube():
+    headers = {'X-Master-Key': JSONBIN_KEY}
     try:
-        df = conn.read(ttl=0)
-        if not df.empty and 'id_partido' in df.columns and 'prediccion' in df.columns:
-            return dict(zip(df['id_partido'].astype(str), df['prediccion'].astype(str)))
-    except Exception as e:
+        response = requests.get(JSONBIN_URL, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('record', {})
+    except:
         pass
     return {}
 
-def guardar_prediccion_sheets(id_partido, marcador):
-    try:
-        df_actual = conn.read(ttl=0)
-    except:
-        df_actual = pd.DataFrame(columns=['id_partido', 'prediccion'])
+def guardar_prediccion_nube(id_partido, marcador):
+    # 1. Traemos el historial completo de la nube
+    estado_actual = cargar_predicciones_nube()
     
-    if df_actual.empty or 'id_partido' not in df_actual.columns:
-        df_actual = pd.DataFrame(columns=['id_partido', 'prediccion'])
-
-    df_actual['id_partido'] = df_actual['id_partido'].astype(str)
-
-    if id_partido in df_actual['id_partido'].values:
-        df_actual.loc[df_actual['id_partido'] == id_partido, 'prediccion'] = marcador
-    else:
-        nueva_fila = pd.DataFrame([{'id_partido': str(id_partido), 'prediccion': str(marcador)}])
-        df_actual = pd.concat([df_actual, nueva_fila], ignore_index=True)
+    # 2. Actualizamos el diccionario con la nueva predicción
+    estado_actual[str(id_partido)] = str(marcador)
     
-    conn.update(data=df_actual)
-    st.session_state['predicciones'][id_partido] = marcador
+    # 3. Sobrescribimos la base de datos en la nube
+    headers = {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_KEY
+    }
+    requests.put(JSONBIN_URL, json=estado_actual, headers=headers)
+    
+    # 4. Actualizamos la memoria visual de la app
+    st.session_state['predicciones'][str(id_partido)] = marcador
 
 # --- TRATAMIENTO DE DATOS DE THE ODDS API ---
 @st.cache_data(ttl=3600)
 def obtener_partidos_api():
     url = f'https://api.the-odds-api.com/v4/sports/{SPORT}/odds'
-    params = {'apiKey': API_KEY, 'regions': REGIONS, 'markets': MARKETS, 'oddsFormat': 'decimal'}
+    params = {'apiKey': API_KEY_ODDS, 'regions': REGIONS, 'markets': MARKETS, 'oddsFormat': 'decimal'}
     response = requests.get(url, params=params)
     if response.status_code == 200:
         return response.json()
     return []
 
 if 'predicciones' not in st.session_state:
-    st.session_state['predicciones'] = cargar_predicciones_sheets()
+    st.session_state['predicciones'] = cargar_predicciones_nube()
 
-st.title("🏆 Prode Mundial 2026 (Nube)")
-st.write("Datos sincronizados directamente en tu Google Sheet.")
+st.title("🏆 Predictor Prode (JSONBin Nube)")
+st.write("Datos guardados permanentemente sin tarjetas de crédito.")
 
 if st.button("🔄 Sincronizar Fixture (Próximos 15 días)"):
     st.cache_data.clear()
-    st.session_state['predicciones'] = cargar_predicciones_sheets()
+    st.session_state['predicciones'] = cargar_predicciones_nube()
     st.rerun()
 
 datos_api = obtener_partidos_api()
@@ -74,7 +74,6 @@ if datos_api:
 
     for partido in datos_api:
         id_partido = str(partido['id'])
-        # Ya tiene corregido el error de la "o" faltante
         fecha_partido = datetime.strptime(partido['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         
         if ahora <= fecha_partido <= proximos_15_dias:
@@ -94,7 +93,7 @@ if datos_api:
                 else:
                     st.info("📝 Estado: Sin predecir")
                 
-                if st.button(f"🔮 Calcular y guardar en Sheets", key=f"btn_{id_partido}"):
+                if st.button(f"🔮 Calcular y guardar", key=f"btn_{id_partido}"):
                     if partido['bookmakers']:
                         h2h = None
                         totals = None
@@ -120,7 +119,6 @@ if datos_api:
                         if h2h:
                             ganador_cuota = min(h2h, key=lambda x: x['price'])['name']
                             
-                            # --- NUEVA LÓGICA DE TRANSPARENCIA ---
                             if totals:
                                 es_under = 'Under' in min(totals, key=lambda x: x['price'])['name']
                                 origen_dato = "🎯 (Apuestas)"
@@ -135,14 +133,13 @@ if datos_api:
                             else:
                                 marcador_base = "1-1" if es_under else "2-2"
                             
-                            # Juntamos el resultado numérico con la etiqueta de cómo se calculó
                             marcador_final = f"{marcador_base} {origen_dato}"
                             
-                            with st.spinner('Guardando en Google Sheets...'):
-                                guardar_prediccion_sheets(id_partido, marcador_final)
+                            with st.spinner('Guardando en la nube...'):
+                                guardar_prediccion_nube(id_partido, marcador_final)
                             st.rerun()
                         else:
-                            st.warning("No se encontraron cuotas base (Ganador/Empate) para este encuentro en ninguna casa de apuestas.")
+                            st.warning("No se encontraron cuotas base para este encuentro.")
                     else:
                         st.warning("No hay cuotas disponibles aún para este partido.")
                         
