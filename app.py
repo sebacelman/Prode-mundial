@@ -82,7 +82,7 @@ if datos_api:
 
     for partido in datos_api:
         id_partido = str(partido['id'])
-        fecha_partido = datetime.strptime(partid['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        fecha_partido = datetime.strptime(partido['commence_time'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         
         # FILTRO: Próximos 15 días
         if ahora <= fecha_partido <= proximos_15_dias:
