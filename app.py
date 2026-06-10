@@ -45,12 +45,10 @@ def calcular_marcador_inteligente(ganador, cuota_ganador, equipo_local, equipo_v
 
     es_goleada = cuota_ganador < 1.55
 
-    # Lógica para Empates (Naturales o Forzados por Paridad)
     if ganador not in [equipo_local, equipo_visitante]:
         if es_under: return "0-0" if linea_numerica < 2.0 else "1-1"
         else: return "2-2" if linea_numerica < 4.0 else "3-3"
 
-    # Lógica sensible al favoritismo
     if es_under:
         if linea_numerica <= 1.5: 
             goles_ganador, goles_perdedor = 1, 0
@@ -60,7 +58,7 @@ def calcular_marcador_inteligente(ganador, cuota_ganador, equipo_local, equipo_v
             goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 1)
         else: 
             goles_ganador, goles_perdedor = (4, 0) if es_goleada else (3, 1)
-    else: # Es Over
+    else: 
         if linea_numerica <= 1.5: 
             goles_ganador, goles_perdedor = (3, 0) if es_goleada else (2, 0)
         elif linea_numerica <= 2.5: 
@@ -92,15 +90,14 @@ if 'predicciones' not in st.session_state:
 st.title("🏆 Mi Prode Inteligente")
 st.write("Predicciones matemáticas con sensibilidad ajustada en tiempo real.")
 
-# Panel lateral para la calibración del usuario
 st.sidebar.header("⚙️ Calibración del Modelo")
 umbral_usuario = st.sidebar.number_input(
     "Umbral de Empate Técnico", 
     min_value=0.00, 
-    max_value=2.00, 
-    value=0.45, 
-    step=0.05,
-    help="Diferencia máxima de cuota entre Local y Visitante para forzar un empate. Por defecto: 0.45 (Percentil 21 de Qatar 2022)."
+    max_value=10.00, 
+    value=2.50, 
+    step=0.10,
+    help="Diferencia máxima de cuota entre Local y Visitante para forzar un empate. Límite máximo ampliado a 10.00."
 )
 
 if st.button("🔄 Sincronizar Fixture (Próximos 15 días)"):
@@ -132,7 +129,7 @@ if datos_api:
                 prediccion_actual = st.session_state['predicciones'].get(id_partido, "Sin predecir")
                 
                 if prediccion_actual != "Sin predecir":
-                    st.success(f"📝 Pronóstico guardado: **{prediccion_actual}**")
+                    st.success(f"📝 Pronóstico: **{prediccion_actual}**")
                 else:
                     st.info("📝 Estado: Sin predecir")
                 
@@ -142,7 +139,6 @@ if datos_api:
                         totals = None
                         nombre_casa = "Desconocida"
                         
-                        # 1. Búsqueda exhaustiva de casas de apuestas
                         for bookmaker in partido['bookmakers']:
                             mercados = bookmaker['markets']
                             h2h_temp = next((m['outcomes'] for m in mercados if m['key'] == 'h2h'), None)
@@ -154,7 +150,6 @@ if datos_api:
                                 nombre_casa = bookmaker['title']
                                 break 
                         
-                        # Respaldo si ninguna tiene todo
                         if not h2h:
                             for bookmaker in partido['bookmakers']:
                                 mercados = bookmaker['markets']
@@ -169,7 +164,6 @@ if datos_api:
                             cuota_visitante = next((x['price'] for x in h2h if x['name'] == equipo_visitante), 99.0)
                             cuota_empate = next((x['price'] for x in h2h if x['name'] in ['Draw', 'Empate']), 3.0)
                             
-                            # 2. Detector de Empate Técnico (con la variable del usuario)
                             if abs(cuota_local - cuota_visitante) <= umbral_usuario and min(cuota_local, cuota_visitante) > 2.00:
                                 ganador_nombre = "Empate Técnico"
                                 ganador_cuota_valor = cuota_empate
@@ -180,7 +174,6 @@ if datos_api:
                                 ganador_cuota_valor = resultado_ganador['price']
                                 es_empate_forzado = False
                             
-                            # 3. Datos de Goles
                             tendencia_goles_str = None
                             origen_dato = "🛡️ (Respaldo)"
                             if totals:
@@ -188,7 +181,6 @@ if datos_api:
                                 tendencia_goles_str = resultado_goles['name']
                                 origen_dato = f"🎯 (Apuestas: {tendencia_goles_str})"
                             
-                            # 4. Cálculo final en el motor
                             marcador_base = calcular_marcador_inteligente(
                                 ganador_nombre, 
                                 ganador_cuota_valor, 
@@ -197,13 +189,14 @@ if datos_api:
                                 tendencia_goles_str
                             )
                             
-                            # 5. Adición de etiquetas visuales recuperadas
                             if es_empate_forzado:
                                 marcador_base = f"⚖️ {marcador_base}"
                             elif ganador_cuota_valor < 1.55 and (tendencia_goles_str and "Over" in tendencia_goles_str):
                                 marcador_base = f"🔥 {marcador_base}"
 
-                            marcador_final = f"{marcador_base} | {origen_dato} | 🏦 {nombre_casa}"
+                            # Anexamos la información explícita de las cuotas al resultado
+                            info_cuotas = f"📊 L {cuota_local} - E {cuota_empate} - V {cuota_visitante}"
+                            marcador_final = f"{marcador_base} | {origen_dato} | 🏦 {nombre_casa} | {info_cuotas}"
                             
                             with st.spinner('Procesando heurística cuantitativa...'):
                                 guardar_prediccion_nube(id_partido, marcador_final)
